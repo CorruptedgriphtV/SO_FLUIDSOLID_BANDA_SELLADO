@@ -1,0 +1,13 @@
+menu "Flow Line - Web app"
+config FLOWLINE_AP_SSID
+    string "SSID de la red Wi-Fi propia del ESP32"
+    default "FlowLine-Selladora"
+    help
+	Nombre de la red que crea el ESP32 (modo AP, sin internet).
+
+config FLOWLINE_AP_PASSWORD
+    string "Contraseña de la red (8+ caracteres; vacía = abierta)"
+    default "flowline123"
+    help
+	Contraseña WPA2 del punto de acceso.
+endmenu

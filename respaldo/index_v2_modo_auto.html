@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flow Line Selladora</title>
+<style>
+:root{--bg:#f3f5f8;--card:#fff;--tx:#18202b;--mut:#677385;--bd:#dde2ea;--ac:#1f6feb;--ok:#1a8f4c;--warn:#c27a00;--err:#c9302c;--off:#e6e9ef}
+@media (prefers-color-scheme:dark){:root{--bg:#0f141b;--card:#171e28;--tx:#e6ebf2;--mut:#8f9bad;--bd:#2a3442;--ac:#4c8dff;--ok:#2fbf6b;--warn:#e0a020;--err:#ff5a52;--off:#232c38}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--bd)}
+header h1{font-size:17px;margin:0}
+#con{font-size:12px;color:var(--mut);display:flex;align-items:center;gap:6px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--err)}
+.dot.on{background:var(--ok)}
+main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:0 0 10px}
+.wide{grid-column:1/-1}
+#banner{display:none;grid-column:1/-1;background:var(--err);color:#fff;border-radius:12px;padding:12px 14px;font-weight:600}
+#banner.show{display:block}
+.etapas{display:flex;gap:6px;flex-wrap:wrap}
+.et{flex:1 1 70px;text-align:center;padding:10px 4px;border-radius:8px;background:var(--off);font-size:12px;font-weight:600;color:var(--mut)}
+.et.act{background:var(--ac);color:#fff}
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:12px}
+.kpi{background:var(--off);border-radius:8px;padding:8px 10px}
+.kpi b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.kpi span{font-size:12px;color:var(--mut)}
+.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:14px 8px;cursor:pointer;color:#fff;background:var(--ac);min-height:48px}
+button:disabled{opacity:.45;cursor:not-allowed}
+.b-ok{background:var(--ok)}.b-err{background:var(--err)}.b-warn{background:var(--warn)}
+#msg{min-height:20px;margin-top:10px;font-size:13px;color:var(--mut)}
+.sal{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--bd)}
+.sal:last-child{border:0}
+.sal.auto{margin-top:12px;padding:10px 12px;border:1px solid var(--bd);border-radius:10px;background:var(--off)}
+.sal.auto .n{text-transform:none}
+.sal.auto small{color:var(--mut)}
+.sal .n{display:flex;align-items:center;gap:8px;text-transform:capitalize}
+.led{width:12px;height:12px;border-radius:50%;background:var(--off);border:1px solid var(--bd)}
+.led.on{background:var(--ok);border-color:var(--ok);box-shadow:0 0 6px var(--ok)}
+.sw{position:relative;width:52px;height:30px;flex:none}
+.sw input{opacity:0;width:0;height:0}
+.sw i{position:absolute;inset:0;background:var(--off);border:1px solid var(--bd);border-radius:30px;transition:.15s}
+.sw i:before{content:"";position:absolute;width:22px;height:22px;left:3px;top:3px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 2px #0004}
+.sw input:checked+i{background:var(--ok);border-color:var(--ok)}
+.sw input:checked+i:before{transform:translateX(22px)}
+.sw input:disabled+i{opacity:.45}
+.hint{font-size:12px;color:var(--mut);margin-top:8px}
+.ent{display:flex;gap:8px;flex-wrap:wrap}
+.ent div{flex:1;display:flex;align-items:center;gap:8px;background:var(--off);border-radius:8px;padding:8px 10px;font-size:13px}
+form{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+label{font-size:12px;color:var(--mut);display:grid;gap:4px}
+input[type=number]{font:inherit;width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--tx)}
+form button{align-self:end}
+#log{font:12px/1.5 ui-monospace,Consolas,monospace;max-height:260px;overflow:auto;background:var(--bg);border-radius:8px;padding:8px;margin:0;white-space:pre-wrap;word-break:break-word}
+#log .a{color:var(--err);font-weight:600}
+</style>
+</head>
+<body>
+<header><h1>Flow Line · Selladora</h1><div id="con"><span class="dot" id="dot"></span><span id="cont">Conectando…</span></div></header>
+<main>
+  <div id="banner">PARO DE EMERGENCIA ACTIVO — todas las salidas apagadas. Libere STOP y pulse Rearme.</div>
+
+  <section class="card">
+    <h2>Proceso</h2>
+    <div class="etapas" id="etapas"></div>
+    <div class="kpis">
+      <div class="kpi"><b id="ciclos">0</b><span>Ciclos completos</span></div>
+      <div class="kpi"><b id="up">0:00</b><span>Tiempo encendido</span></div>
+      <div class="kpi"><b id="cicloAct">No</b><span>Ciclo en curso</span></div>
+      <div class="kpi"><b id="cli">0</b><span>Clientes Wi-Fi</span></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Control</h2>
+    <div class="btns">
+      <button class="b-ok" id="bStart">Iniciar ciclo</button>
+      <button class="b-err" id="bParo">PARO</button>
+      <button class="b-warn" id="bRearme">Rearme</button>
+    </div>
+    <div class="sal auto"><span class="n"><span class="led" id="led_auto"></span><span><b>Modo automático</b><br><small id="autoTxt">Apagado: un ciclo por START</small></span></span><label class="sw"><input type="checkbox" id="sw_auto"><i></i></label></div>
+    <div id="msg"></div>
+    <h2 style="margin-top:14px">Entradas físicas</h2>
+    <div class="ent">
+      <div><span class="led" id="inStart"></span>START_F</div>
+      <div><span class="led" id="inStop"></span>STOP_EMG</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Salidas (modo manual)</h2>
+    <div id="salidas"></div>
+    <div class="hint">El modo manual solo está disponible sin ciclo en curso, sin modo automático y sin emergencia.</div>
+  </section>
+
+  <section class="card wide">
+    <h2>Tiempos (ms, 100–60000)</h2>
+    <form id="fT">
+      <label>Sujeción<input type="number" name="sujecion" min="100" max="60000" step="50" required></label>
+      <label>Sellado<input type="number" name="sellado" min="100" max="60000" step="50" required></label>
+      <label>Evacuación<input type="number" name="evacuacion" min="100" max="60000" step="50" required></label>
+      <label>Marcha banda<input type="number" name="banda" min="100" max="60000" step="50" required></label>
+      <label>Pausa banda<input type="number" name="pausa" min="100" max="60000" step="50" required></label>
+      <button type="submit" id="bGuardar">Guardar</button>
+    </form>
+  </section>
+
+  <section class="card wide">
+    <h2>Bitácora</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const ETAPAS=["ESPERA","SUJECION","SELLADO","EVACUACION"];
+const SAL=["banda","bomba","piston1","piston2","calentador"];
+const NOMBRE={banda:"Banda",bomba:"Bomba",piston1:"Pistón 1",piston2:"Pistón 2",calentador:"Calentador"};
+$("etapas").innerHTML=ETAPAS.map(e=>`<div class="et" id="et_${e}">${e}</div>`).join("");
+$("salidas").innerHTML=SAL.map(s=>`<div class="sal"><span class="n"><span class="led" id="led_${s}"></span>${NOMBRE[s]}</span><label class="sw"><input type="checkbox" id="sw_${s}" data-s="${s}"><i></i></label></div>`).join("");
+let editT=false,lastSeq=-1,fallos=0;
+
+function msg(t,err){$("msg").textContent=t;$("msg").style.color=err?"var(--err)":"var(--mut)"}
+async function post(url){
+  try{const r=await fetch(url,{method:"POST"});const j=await r.json();msg(j.msg,!j.ok);return j.ok}
+  catch(e){msg("Sin conexión con el ESP32",true);return false}
+}
+function hms(ms){let s=Math.floor(ms/1000),h=Math.floor(s/3600),m=Math.floor(s%3600/60);s%=60;return (h?h+":"+String(m).padStart(2,"0"):m)+":"+String(s).padStart(2,"0")}
+
+function pintar(d){
+  ETAPAS.forEach(e=>$("et_"+e).classList.toggle("act",d.etapa===e));
+  $("ciclos").textContent=d.ciclos;$("up").textContent=hms(d.uptime);
+  $("cicloAct").textContent=d.ciclo?"Sí":"No";$("cli").textContent=d.clientes;
+  $("banner").classList.toggle("show",!!d.emergencia);
+  $("inStart").classList.toggle("on",!!d.start);$("inStop").classList.toggle("on",!!d.stop);
+  $("bStart").disabled=!!(d.emergencia||d.ciclo);$("bRearme").disabled=!d.emergencia;
+  $("sw_auto").checked=!!d.auto;$("sw_auto").disabled=!!(d.emergencia&&!d.auto);
+  $("led_auto").classList.toggle("on",!!d.auto);
+  $("autoTxt").textContent=d.auto?"Encendido: ciclos continuos":"Apagado: un ciclo por START";
+  const bloq=!!(d.emergencia||d.ciclo||d.auto);
+  SAL.forEach(s=>{const on=!!d.salidas[s];$("led_"+s).classList.toggle("on",on);const sw=$("sw_"+s);sw.checked=on;sw.disabled=bloq});
+  if(!editT){for(const k in d.tiempos){const i=$("fT").elements[k];if(i)i.value=d.tiempos[k]}}
+  $("bGuardar").disabled=!!d.ciclo;
+  if(d.logSeq!==lastSeq){
+    lastSeq=d.logSeq;const L=$("log");const abajo=L.scrollTop+L.clientHeight>=L.scrollHeight-10;
+    L.innerHTML=d.log.map(([t,x])=>{const e=document.createElement("span");e.textContent=`[${hms(t)}] ${x}`;if(/ALERTA|abortado/.test(x))e.className="a";return e.outerHTML}).join("\n");
+    if(abajo)L.scrollTop=L.scrollHeight;
+  }
+}
+async function ciclo(){
+  try{
+    const r=await fetch("/api/estado",{cache:"no-store"});pintar(await r.json());
+    fallos=0;$("dot").classList.add("on");$("cont").textContent="En línea";
+  }catch(e){
+    if(++fallos>2){$("dot").classList.remove("on");$("cont").textContent="Sin conexión"}
+  }
+  setTimeout(ciclo,500);
+}
+$("bStart").onclick=()=>post("/api/cmd?a=start");
+$("bParo").onclick=()=>post("/api/cmd?a=paro");
+$("bRearme").onclick=()=>post("/api/cmd?a=rearme");
+$("sw_auto").onchange=async e=>{
+  const sw=e.target;if(!await post(`/api/cmd?a=auto&v=${sw.checked?1:0}`))sw.checked=!sw.checked;
+};
+$("salidas").addEventListener("change",async e=>{
+  const sw=e.target;if(!sw.dataset.s)return;
+  if(!await post(`/api/cmd?a=salida&s=${sw.dataset.s}&v=${sw.checked?1:0}`))sw.checked=!sw.checked;
+});
+const fT=$("fT");
+fT.addEventListener("focusin",()=>editT=true);
+fT.addEventListener("focusout",()=>setTimeout(()=>{if(!fT.contains(document.activeElement))editT=false},0));
+fT.onsubmit=async e=>{
+  e.preventDefault();
+  const q=new URLSearchParams(new FormData(fT)).toString();
+  if(await post("/api/config?"+q)){editT=false;document.activeElement.blur()}
+};
+ciclo();
+</script>
+</body>
+</html>
