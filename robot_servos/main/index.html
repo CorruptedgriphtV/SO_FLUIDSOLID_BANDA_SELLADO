@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Brazo 5 DOF</title>
+<style>
+:root{--bg:#f3f5f8;--card:#fff;--tx:#18202b;--mut:#677385;--bd:#dde2ea;--ac:#1f6feb;--ok:#1a8f4c;--err:#c9302c;--off:#e6e9ef}
+@media (prefers-color-scheme:dark){:root{--bg:#0f141b;--card:#171e28;--tx:#e6ebf2;--mut:#8f9bad;--bd:#2a3442;--ac:#4c8dff;--ok:#2fbf6b;--err:#ff5a52;--off:#232c38}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--bd)}
+header h1{font-size:17px;margin:0}
+.estado{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mut)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--err)}
+.dot.on{background:var(--ok)}
+main{max-width:1000px;margin:0 auto;padding:16px;display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;min-width:0}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:0 0 8px;display:flex;justify-content:space-between}
+.wide{grid-column:1/-1}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:10px 14px;cursor:pointer;color:#fff;background:var(--ac);min-height:42px}
+.b-sec{background:var(--off);color:var(--tx);border:1px solid var(--bd)}
+.grados{display:flex;align-items:baseline;gap:8px;margin:2px 0 8px}
+.grados .g{font-size:36px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.grados small{font-size:13px;color:var(--mut)}
+input[type=range]{width:100%;height:34px;accent-color:var(--ac);touch-action:manipulation}
+.marcas{display:flex;justify-content:space-between;font-size:11px;color:var(--mut);margin-top:-4px}
+.fila{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.fila button{flex:1 1 56px}
+#msg{min-height:18px;font-size:13px;color:var(--mut);margin-top:8px}
+/* Vista 3D con CSS (sin librerías, funciona sin internet) */
+#escena{position:relative;height:400px;perspective:1000px;overflow:hidden;border-radius:8px;cursor:grab;touch-action:none;
+  background:radial-gradient(ellipse at 50% 85%,var(--off),var(--bg) 70%)}
+#escena:active{cursor:grabbing}
+#camara,.nodo,.caja{position:absolute;left:0;top:0;transform-style:preserve-3d}
+#camara{left:50%;top:88%}
+.cara{position:absolute;left:0;top:0;border:1px solid rgba(0,0,0,.18)}
+.mov{transition:transform .2s linear}
+.sombra{position:absolute;left:-100px;top:-100px;width:200px;height:200px;border-radius:50%;
+  background:radial-gradient(circle,rgba(0,0,0,.28),transparent 70%);transform:rotateX(90deg)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Brazo 5 DOF</h1>
+  <div class="estado"><span class="dot" id="dot"></span><span id="estadoTxt">Conectando…</span></div>
+</header>
+<main id="main">
+  <section class="card wide">
+    <h2><span>Vista 3D</span><span>arrastra para girar</span></h2>
+    <div id="escena"><div id="camara"></div></div>
+    <div class="fila"><button id="bHome">Home</button></div>
+    <div id="msg"></div>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+// Articulaciones en el orden del firmware (J1..J5)
+const J=[
+  {n:"Base",pin:"D23",min:"0°",max:"180°"},
+  {n:"Hombro",pin:"D22",min:"0°",max:"180°"},
+  {n:"Codo",pin:"D19",min:"0°",max:"180°"},
+  {n:"Muñeca",pin:"D18",min:"0°",max:"180°"},
+  {n:"Pinza",pin:"D15",min:"0° cerrada",max:"180° abierta"},
+];
+$("main").insertAdjacentHTML("beforeend",J.map((j,i)=>`
+  <section class="card" data-servo="${i+1}">
+    <h2><span>${j.n} · J${i+1}</span><span>${j.pin}</span></h2>
+    <div class="grados"><span class="g">—</span><small class="real">sin orden</small></div>
+    <input type="range" min="0" max="180" step="1" value="90" aria-label="Posición de ${j.n}">
+    <div class="marcas"><span>${j.min}</span><span>90°</span><span>${j.max}</span></div>
+    <div class="fila"><button class="b-sec" data-v="0">0°</button><button class="b-sec" data-v="90">90°</button><button class="b-sec" data-v="180">180°</button></div>
+  </section>`).join(""));
+
+const pendiente={},enviado={};
+let temporizador=null,arrastrando=0,fallos=0,ocupado=false;
+function msg(t,err){$("msg").textContent=t;$("msg").style.color=err?"var(--err)":"var(--mut)"}
+function enLinea(on){$("dot").classList.toggle("on",on);$("estadoTxt").textContent=on?"En línea":"Sin conexión"}
+
+// ---- Vista 3D genérica de un brazo de 5 ejes ----
+function caja(w,h,d,color){
+  const b=document.createElement("div");b.className="caja";
+  [[w,h,`translateZ(${d/2}px)`,1],[w,h,`rotateY(180deg) translateZ(${d/2}px)`,.55],
+   [d,h,`rotateY(90deg) translateZ(${w/2}px)`,.78],[d,h,`rotateY(-90deg) translateZ(${w/2}px)`,.68],
+   [w,d,`rotateX(90deg) translateZ(${h/2}px)`,1.12],[w,d,`rotateX(-90deg) translateZ(${h/2}px)`,.45]]
+  .forEach(([cw,ch,t,luz])=>{const f=document.createElement("div");f.className="cara";
+    f.style.cssText=`width:${cw}px;height:${ch}px;margin:${-ch/2}px 0 0 ${-cw/2}px;transform:${t};background:${color};filter:brightness(${luz})`;
+    b.appendChild(f)});
+  return b;
+}
+function nodo(transform,...hijos){const n=document.createElement("div");n.className="nodo";n.style.transform=transform;hijos.forEach(h=>n.appendChild(h));return n}
+const GRIS="#8a96a8",BLANCO="#e9edf2",NEGRO="#3a4250",NARANJA="#e07a2e";
+// Cada articulación es un nodo con su traslado fijo + la rotación del servo
+const art=[];
+function articulacion(fijo,eje,...hijos){const n=nodo("",...hijos);n.classList.add("mov");art.push({n,fijo,eje});return n}
+const dedoIzq=nodo("",caja(9,52,26,NARANJA)),dedoDer=nodo("",caja(9,52,26,NARANJA));
+dedoIzq.classList.add("mov");dedoDer.classList.add("mov");
+const pinza=nodo("",caja(70,16,34,NEGRO),nodo("translateY(-34px)",dedoIzq,dedoDer));
+const muneca=articulacion("translateY(-110px)","Z",caja(34,24,34,GRIS),nodo("translateY(-24px)",pinza));
+const codo=articulacion("translateY(-130px)","Z",caja(40,30,46,GRIS),nodo("translateY(-55px)",caja(30,110,30,BLANCO)),muneca);
+const hombro=articulacion("translateY(-42px)","Z",caja(46,34,52,GRIS),nodo("translateY(-65px)",caja(36,130,36,BLANCO)),codo);
+const base=articulacion("translateY(-24px)","Y",caja(90,40,90,NEGRO),hombro);
+const sombra=document.createElement("div");sombra.className="sombra";
+$("camara").appendChild(nodo("",sombra,nodo("translateY(-10px)",caja(150,20,150,NEGRO)),base));
+
+let rotY=-35,rotX=-14,escala=1;
+function camara(){$("camara").style.transform=`scale(${escala}) rotateX(${rotX}deg) rotateY(${rotY}deg)`}
+function ajustarEscala(){escala=Math.min(.8,$("escena").clientWidth/560);camara()}
+function actualizar3D(i,grados){   // i = 0..4
+  if(i===4){const ab=3+grados/180*24;   // 0° cerrada, 180° abierta
+    dedoIzq.style.transform=`translateX(${-4-ab}px)`;dedoDer.style.transform=`translateX(${4+ab}px)`;return}
+  const a=art[3-i];  // art: muñeca, codo, hombro, base (orden de creación)
+  a.n.style.transform=`${a.fijo} rotate${a.eje}(${grados-90}deg)`;
+}
+{ // Arrastrar para girar la cámara
+  let px=null,py=null;
+  $("escena").addEventListener("pointerdown",e=>{px=e.clientX;py=e.clientY;$("escena").setPointerCapture(e.pointerId)});
+  $("escena").addEventListener("pointermove",e=>{if(px===null)return;
+    rotY+=(e.clientX-px)*.5;rotX=Math.max(-60,Math.min(10,rotX-(e.clientY-py)*.3));px=e.clientX;py=e.clientY;camara()});
+  ["pointerup","pointercancel"].forEach(t=>$("escena").addEventListener(t,()=>px=null));
+}
+window.addEventListener("resize",ajustarEscala);
+ajustarEscala();
+for(let i=0;i<5;i++)actualizar3D(i,90);
+
+// ---- Comunicación con el ESP32 ----
+// objetivo < 0: la articulación aún no recibe ninguna orden (sin señal, se queda donde está)
+function mostrar(servo,obj,real){
+  const c=document.querySelector(`[data-servo="${servo}"]`),sin=obj<0;
+  c.querySelector(".g").textContent=sin?"—":obj+"°";
+  c.querySelector(".real").textContent=sin?"sin orden":(real!==undefined&&real!==obj?`moviéndose · ${real}°`:"");
+  if(!sin){c.querySelector("input").value=obj;actualizar3D(servo-1,real!==undefined&&real>=0?real:obj)}
+}
+function pintarRespuesta(j,todo){
+  for(let i=0;i<5;i++){
+    const s=i+1;
+    if(!todo&&(s in pendiente)&&pendiente[s]!==enviado[s])continue;  // no pisar lo que se está moviendo
+    if(todo||!arrastrando)mostrar(s,j.obj[i],j.pos[i]);
+    if(j.obj[i]>=0)enviado[s]=j.obj[i];
+  }
+}
+async function post(url){
+  try{const r=await fetch(url,{method:"POST"});const j=await r.json();fallos=0;enLinea(true);
+    if(!j.ok)msg(j.msg,true);return j}
+  catch(e){msg("Sin conexión con el ESP32",true);enLinea(false);return null}
+}
+// Al mover un slider: como máximo un envío cada 60 ms, siempre con el último valor
+function pedir(servo,grados){
+  pendiente[servo]=grados;
+  const c=document.querySelector(`[data-servo="${servo}"]`);
+  c.querySelector(".g").textContent=grados+"°";c.querySelector(".real").textContent="";
+  actualizar3D(servo-1,grados);
+  if(!temporizador)temporizador=setTimeout(vaciar,60);
+}
+async function vaciar(){
+  temporizador=null;if(ocupado){temporizador=setTimeout(vaciar,30);return}
+  ocupado=true;
+  for(const s in pendiente){if(pendiente[s]!==enviado[s]){enviado[s]=pendiente[s];await post(`/api/servo?s=${s}&g=${pendiente[s]}`)}}
+  ocupado=false;
+}
+// Sondeo: estado de conexión y posición real (más rápido mientras alguna articulación se mueve)
+async function sondear(){
+  let moviendo=false;
+  try{
+    const r=await fetch("/api/pos",{cache:"no-store"});const j=await r.json();
+    fallos=0;enLinea(true);
+    if(!temporizador)pintarRespuesta(j,false);
+    moviendo=j.pos.some((p,i)=>p>=0&&p!==j.obj[i]);
+  }catch(e){if(++fallos>1)enLinea(false)}
+  setTimeout(sondear,moviendo?200:1000);
+}
+document.querySelectorAll("[data-servo]").forEach(c=>{
+  const s=+c.dataset.servo,r=c.querySelector("input");
+  r.addEventListener("input",e=>pedir(s,+e.target.value));
+  r.addEventListener("pointerdown",()=>arrastrando++);
+  c.querySelectorAll("button[data-v]").forEach(b=>b.onclick=()=>pedir(s,+b.dataset.v));
+});
+["pointerup","pointercancel"].forEach(t=>window.addEventListener(t,()=>arrastrando=0));
+$("bHome").onclick=async()=>{
+  for(const s in pendiente)delete pendiente[s];
+  const j=await post("/api/home");
+  if(j&&j.ok){pintarRespuesta(j,true);msg(`Home: ${j.home.map((g,i)=>J[i].n+" "+g+"°").join(", ")}`)}};
+sondear();
+</script>
+</body>
+</html>

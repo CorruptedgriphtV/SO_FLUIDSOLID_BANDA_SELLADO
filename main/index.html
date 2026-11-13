@@ -134,6 +134,17 @@ button:disabled{opacity:.45;cursor:not-allowed}
   </section>
 
   <section class="card">
+    <h2>Compresor <small class="pin">D26</small></h2>
+    <div class="sal auto" style="margin-top:0"><span class="n"><span class="led" id="led_comp"></span><span><b id="compFase">Apagado</b><br><small id="compTxt">—</small></span></span><label class="sw"><input type="checkbox" id="sw_comp"><i></i></label></div>
+    <div class="ms" style="margin-top:12px;gap:8px;flex-wrap:wrap">
+      <label class="ms">Marcha máx. <input type="number" id="compMarcha" min="5" max="600" step="5"> s</label>
+      <label class="ms">Reposo <input type="number" id="compReposo" min="10" max="3600" step="10"> s</label>
+      <button class="b-sec" id="bComp" style="min-height:36px;padding:6px 12px">Guardar</button>
+    </div>
+    <div class="hint">Sin sensor de presión: marcha como máximo el tiempo indicado y luego descansa para enfriarse. Apagarlo y volverlo a encender no se salta el descanso. Un paro de emergencia lo apaga.</div>
+  </section>
+
+  <section class="card">
     <h2>Salidas (modo manual)</h2>
     <div id="salidas"></div>
     <div class="hint">El modo manual solo está disponible sin ciclo en curso, sin modo automático y sin emergencia.</div>
@@ -268,12 +279,32 @@ function pintarDiag(d){
     return `<tr><td>${NOMBRE[s]}</td><td>${PIN[s]}</td><td>Salida · activa en ${bajo?"LOW":"HIGH"}</td><td>${on?"ON":"OFF"}</td><td class="n">${niv}</td><td class="${c}">${t}</td></tr>`}).join("");
   h+=ENT.map(([k,n,p])=>{const niv=d.pinIn[k];
     return `<tr><td>${n}</td><td>${p}</td><td>Entrada · pull-up</td><td class="neu">—</td><td class="n">${niv}</td><td class="${niv?"neu":"ok"}">${niv?"Reposo":"Activo"}</td></tr>`}).join("");
+  if(d.comp){const on=d.comp.fase==="MARCHA",[c,t]=diagSalida(on,d.comp.nivel,1);
+    h+=`<tr><td>Compresor</td><td>D26</td><td>Salida · activa en LOW</td><td>${on?"ON":"OFF"}</td><td class="n">${d.comp.nivel}</td><td class="${c}">${t}</td></tr>`}
   $("diag").tBodies[0].innerHTML=h;
 }
+
+// ---- Compresor ----
+let editComp=false;
+function pintarComp(c){
+  if(!c)return;
+  const txt={APAGADO:"Apagado",MARCHA:"En marcha",REPOSO:"Enfriándose"};
+  $("compFase").textContent=txt[c.fase]||c.fase;
+  $("compTxt").textContent=c.fase==="MARCHA"?`se detiene en ${c.restante} s`:
+    c.fase==="REPOSO"?`vuelve a arrancar en ${c.restante} s`:
+    (c.restante>0?`enfriando ${c.restante} s más`:"listo para arrancar");
+  $("led_comp").classList.toggle("on",c.fase==="MARCHA");
+  $("sw_comp").checked=!!c.hab;
+  if(!editComp){$("compMarcha").value=c.marcha;$("compReposo").value=c.reposo}
+}
+$("sw_comp").onchange=async e=>{const sw=e.target;if(!await post(`/api/comp?hab=${sw.checked?1:0}`))sw.checked=!sw.checked};
+["compMarcha","compReposo"].forEach(id=>{$(id).addEventListener("focus",()=>editComp=true);$(id).addEventListener("blur",()=>setTimeout(()=>editComp=false,300))});
+$("bComp").onclick=async()=>{if(await post(`/api/comp?marcha=${Math.round(+$("compMarcha").value)}&reposo=${Math.round(+$("compReposo").value)}`))editComp=false};
 
 function pintar(d){
   ultimo=d;
   pintarDiag(d);
+  pintarComp(d.comp);
   const L=JSON.stringify(d.linea);
   if(L!==lineaDev){const sinCambios=!editando();lineaDev=L;if(sinCambios||!borrador){borrador=JSON.parse(L)}dibujarEditor()}
   if(!editando())moverCursor(d);

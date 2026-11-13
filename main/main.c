@@ -23,13 +23,27 @@
 #define PIN_CALENTADOR GPIO_NUM_23   // Control relé Auxiliar / Calentador (RL2 / Q4) (D23)
 
 // Definición de Pines de Entrada (Pulsadores / Sensores, activos en bajo)
-// Todos los pines (salidas y entradas) están en la hilera superior de la placa: 3V3 GND D15 D2 D4 TX2 ... D21 D22
+// Salidas, botones y sensores van en la hilera de 3V3/GND (D15 D2 D4 RX2 TX2 D5 D18 D19 D23);
+// el relé del compresor (D26) está en la hilera opuesta
 #define PIN_START_F    GPIO_NUM_19   // Botón de Inicio Ciclo (D19)
 #define PIN_STOP_EMG   GPIO_NUM_17   // Paro de Emergencia (TX2 = GPIO17)
 
 // Sensores ópticos NPN (tipo E18-D80NK): la salida baja a LOW cuando detectan un objeto
 #define PIN_SENSOR_1   GPIO_NUM_16   // S1: sensor de bolsa en la estación de llenado (RX2 = GPIO16)
 #define PIN_SENSOR_2   GPIO_NUM_18   // S2: sensor de bolsa al final de la banda (D18)
+
+// --- Compresor: relé del módulo de 4 canales (activo en LOW, drenador abierto) ---
+// Sin sensor de presión, el compresor se queda en marcha aunque ya no suba la presión y se calienta.
+// Por eso la marcha está limitada a comp_marcha_s y después descansa comp_reposo_s. El reposo es
+// proporcional a lo que marchó, así que apagarlo y volverlo a encender no se salta el enfriamiento.
+#define PIN_COMPRESOR      GPIO_NUM_26  // Relé del compresor (D26)
+#define COMP_MARCHA_DEF_S  60           // Tiempo máximo de marcha continua
+#define COMP_REPOSO_DEF_S  120          // Descanso tras una marcha completa
+#define COMP_MARCHA_MIN_S  5
+#define COMP_MARCHA_MAX_S  600
+#define COMP_REPOSO_MIN_S  10
+#define COMP_REPOSO_MAX_S  3600
+#define COMP_PERIODO_MS    100
 #define T_DETECCION_MS 300           // Para iniciar un paso, la detección debe mantenerse estable este tiempo
 #define T_DETECCION_FIN_MS 50        // Para terminar un paso (p. ej. detener la banda) basta este tiempo
 
@@ -233,10 +247,26 @@ static void nombres_mascara(uint8_t mascara, char *buf, size_t len) {
     if (!buf[0]) strncpy(buf, "pausa", len);
 }
 
+// --- Estado del compresor ---
+typedef enum { COMP_APAGADO, COMP_MARCHA, COMP_REPOSO } fase_comp_t;
+static const char *NOMBRE_FASE_COMP[] = {"APAGADO", "MARCHA", "REPOSO"};
+static volatile bool comp_habilitado = false;     // No se guarda: al arrancar el compresor queda apagado
+static volatile fase_comp_t comp_fase = COMP_APAGADO;
+static volatile uint32_t comp_t0 = 0;             // millis() al arrancar la marcha actual
+static volatile uint32_t comp_reposo_hasta = 0;   // millis() hasta el que debe seguir enfriándose
+static volatile uint32_t comp_marcha_s = COMP_MARCHA_DEF_S;
+static volatile uint32_t comp_reposo_s = COMP_REPOSO_DEF_S;
+
+static void rele_compresor(bool on) {
+    gpio_set_level(PIN_COMPRESOR, on ? 0 : 1);  // LOW = relé activado; 1 = pin flotante (apagado)
+}
+
 static void activar_emergencia(const char *origen) {
     xEventGroupSetBits(xEventosSistema, EV_EMERGENCIA);
     xEventGroupClearBits(xEventosSistema, EV_START_WEB | EV_AUTO);  // El paro también cancela el modo automático
     apagar_todas_las_salidas();
+    rele_compresor(false);  // Task_Compresor registra el reposo en su siguiente paso
+    comp_habilitado = false;
     bitacora("[ALERTA CRITICA] PARO DE EMERGENCIA ACTIVADO (%s)!", origen);
 }
 
@@ -356,6 +386,82 @@ static void vTaskSeguridad(void *pvParameters) {
     }
 }
 
+// Detiene la marcha y calcula el enfriamiento proporcional a lo que estuvo encendido
+static void detener_compresor(uint32_t ahora, const char *motivo) {
+    rele_compresor(false);
+    uint32_t marcho_ms = ahora - comp_t0;
+    uint64_t reposo_ms = (uint64_t)comp_reposo_s * 1000 * marcho_ms / ((uint64_t)comp_marcha_s * 1000);
+    comp_reposo_hasta = ahora + (uint32_t)reposo_ms;
+    bitacora("[COMPRESOR] OFF (%s) tras %lu s. Enfriando %lu s", motivo, (unsigned long)(marcho_ms / 1000),
+             (unsigned long)(reposo_ms / 1000));
+}
+
+// --- TAREA 3: Compresor con límite de marcha y descanso obligatorio ---
+static void vTaskCompresor(void *pvParameters) {
+    while (true) {
+        uint32_t ahora = millis();
+        bool puede = comp_habilitado && !emergencia_activa();
+        if (!puede) {
+            if (comp_fase == COMP_MARCHA) {
+                detener_compresor(ahora, emergencia_activa() ? "emergencia" : "apagado desde la web");
+            }
+            rele_compresor(false);
+            comp_fase = COMP_APAGADO;
+        } else if (comp_fase == COMP_MARCHA) {
+            if (ahora - comp_t0 >= comp_marcha_s * 1000) {
+                detener_compresor(ahora, "tiempo maximo de marcha");
+                comp_fase = COMP_REPOSO;
+            }
+        } else if ((int32_t)(ahora - comp_reposo_hasta) >= 0) {
+            comp_t0 = ahora;
+            comp_fase = COMP_MARCHA;
+            rele_compresor(true);
+            bitacora("[COMPRESOR] ON (maximo %lu s)", (unsigned long)comp_marcha_s);
+        } else {
+            comp_fase = COMP_REPOSO;  // Habilitado, pero aún enfriándose
+        }
+        vTaskDelay(pdMS_TO_TICKS(COMP_PERIODO_MS));
+    }
+}
+
+// Segundos que faltan para que termine la fase actual (marcha o reposo)
+static uint32_t comp_restante_s(void) {
+    uint32_t ahora = millis();
+    if (comp_fase == COMP_MARCHA) {
+        uint32_t t = ahora - comp_t0;
+        return t >= comp_marcha_s * 1000 ? 0 : (comp_marcha_s * 1000 - t + 999) / 1000;
+    }
+    int32_t falta = (int32_t)(comp_reposo_hasta - ahora);
+    return falta > 0 ? ((uint32_t)falta + 999) / 1000 : 0;
+}
+
+// ======================= PERSISTENCIA DEL COMPRESOR =======================
+static void cargar_tiempos_compresor(void) {
+    nvs_handle_t h;
+    if (nvs_open("flowline", NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    uint32_t v;
+    if (nvs_get_u32(h, "c_marcha", &v) == ESP_OK && v >= COMP_MARCHA_MIN_S && v <= COMP_MARCHA_MAX_S) {
+        comp_marcha_s = v;
+    }
+    if (nvs_get_u32(h, "c_reposo", &v) == ESP_OK && v >= COMP_REPOSO_MIN_S && v <= COMP_REPOSO_MAX_S) {
+        comp_reposo_s = v;
+    }
+    nvs_close(h);
+}
+
+static void guardar_tiempos_compresor(void) {
+    nvs_handle_t h;
+    if (nvs_open("flowline", NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_u32(h, "c_marcha", comp_marcha_s);
+    nvs_set_u32(h, "c_reposo", comp_reposo_s);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 // ======================= PERSISTENCIA DE LA LÍNEA DE TIEMPO =======================
 static bool linea_valida(const linea_t *l) {
     if (l->n < 1 || l->n > MAX_PASOS) {
@@ -432,6 +538,11 @@ static esp_err_t h_estado(httpd_req_t *req) {
                   "],\"pinIn\":{\"start\":%d,\"stop\":%d,\"s1\":%d,\"s2\":%d",
                   gpio_get_level(PIN_START_F), gpio_get_level(PIN_STOP_EMG),
                   gpio_get_level(PIN_SENSOR_1), gpio_get_level(PIN_SENSOR_2));
+    n += snprintf(json + n, sizeof(json) - n,
+                  "},\"comp\":{\"hab\":%d,\"fase\":\"%s\",\"restante\":%lu,\"marcha\":%lu,\"reposo\":%lu,"
+                  "\"nivel\":%d",
+                  comp_habilitado ? 1 : 0, NOMBRE_FASE_COMP[comp_fase], (unsigned long)comp_restante_s(),
+                  (unsigned long)comp_marcha_s, (unsigned long)comp_reposo_s, gpio_get_level(PIN_COMPRESOR));
     n += snprintf(json + n, sizeof(json) - n, "},\"linea\":[");
     xSemaphoreTake(xLineaMutex, portMAX_DELAY);
     for (int i = 0; i < linea.n; i++) {
@@ -597,6 +708,43 @@ static void iniciar_wifi_ap(void) {
     bitacora("[WIFI] Red \"%s\" activa. Abra http://192.168.4.1", AP_SSID);
 }
 
+// POST /api/comp?hab=0|1   y/o   ?marcha=<s>&reposo=<s>
+static esp_err_t h_comp(httpd_req_t *req) {
+    char q[64] = "", v[12] = "";
+    httpd_req_get_url_query_str(req, q, sizeof(q));
+    bool cambia_t = false;
+    uint32_t marcha = comp_marcha_s, reposo = comp_reposo_s;
+    if (httpd_query_key_value(q, "marcha", v, sizeof(v)) == ESP_OK) {
+        long x = strtol(v, NULL, 10);
+        if (x < COMP_MARCHA_MIN_S || x > COMP_MARCHA_MAX_S) return responder(req, false, "Marcha: 5 a 600 s");
+        marcha = (uint32_t)x;
+        cambia_t = true;
+    }
+    if (httpd_query_key_value(q, "reposo", v, sizeof(v)) == ESP_OK) {
+        long x = strtol(v, NULL, 10);
+        if (x < COMP_REPOSO_MIN_S || x > COMP_REPOSO_MAX_S) return responder(req, false, "Reposo: 10 a 3600 s");
+        reposo = (uint32_t)x;
+        cambia_t = true;
+    }
+    if (cambia_t) {
+        comp_marcha_s = marcha;
+        comp_reposo_s = reposo;
+        guardar_tiempos_compresor();
+        bitacora("[COMPRESOR] Tiempos: marcha %lu s, reposo %lu s", (unsigned long)marcha, (unsigned long)reposo);
+    }
+    if (httpd_query_key_value(q, "hab", v, sizeof(v)) == ESP_OK) {
+        if (v[0] == '1') {
+            if (emergencia_activa()) return responder(req, false, "Emergencia activa: rearme primero");
+            comp_habilitado = true;
+            bitacora("[COMPRESOR] Habilitado desde la web");
+            return responder(req, true, "Compresor habilitado");
+        }
+        comp_habilitado = false;
+        return responder(req, true, "Compresor apagado");
+    }
+    return responder(req, true, cambia_t ? "Tiempos guardados" : "Sin cambios");
+}
+
 static void iniciar_servidor_web(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
@@ -611,6 +759,7 @@ static void iniciar_servidor_web(void) {
         {.uri = "/api/estado", .method = HTTP_GET, .handler = h_estado},
         {.uri = "/api/cmd", .method = HTTP_POST, .handler = h_cmd},
         {.uri = "/api/linea", .method = HTTP_POST, .handler = h_linea},
+        {.uri = "/api/comp", .method = HTTP_POST, .handler = h_comp},
     };
     for (size_t i = 0; i < sizeof(rutas) / sizeof(rutas[0]); i++) {
         httpd_register_uri_handler(srv, &rutas[i]);
@@ -663,6 +812,18 @@ void app_main(void) {
     gpio_config(&salidas_alto);
     apagar_todas_las_salidas();
 
+    // Compresor: mismo módulo de 4 relés (activo en LOW, drenador abierto), apagado al arrancar
+    rele_compresor(false);
+    gpio_config_t compresor = {
+        .pin_bit_mask = 1ULL << PIN_COMPRESOR,
+        .mode = GPIO_MODE_INPUT_OUTPUT_OD,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&compresor);
+    rele_compresor(false);
+
     // Configuración de entradas con resistencias Pull-Up internas
     gpio_config_t entradas = {
         .pin_bit_mask = (1ULL << PIN_START_F) | (1ULL << PIN_STOP_EMG) |
@@ -687,10 +848,12 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(err);
     cargar_linea();
+    cargar_tiempos_compresor();
 
     // Creación de tareas independientes en FreeRTOS (stack en bytes; printf necesita margen)
     xTaskCreate(vTaskSeguridad, "Task_Seguridad", 3072, NULL, 5, NULL);
     xTaskCreate(vTaskProceso, "Task_Proceso", 4096, NULL, 3, NULL);
+    xTaskCreate(vTaskCompresor, "Task_Compresor", 3072, NULL, 2, NULL);
 
     // Monitoreo y control: red Wi-Fi propia + servidor HTTP (tarea httpd, prioridad 5 por defecto)
     iniciar_wifi_ap();
