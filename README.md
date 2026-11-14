@@ -13,6 +13,8 @@ Repositorio con dos proyectos independientes de ESP-IDF para ESP32:
 
 ## Selladora Flow Line
 
+![Render de la Selladora Flow Line](docs/img/selladora.svg)
+
 Firmware para un ESP32 que automatiza una línea de llenado y sellado de bolsas: espera la bolsa, dosifica con la bomba, sella con dos pistones y la saca con la banda hasta el final de la línea. Todo se monitorea y configura desde una web servida por el propio ESP32 en su red Wi-Fi.
 
 ### Características
@@ -43,6 +45,8 @@ Detalle completo en [TABLA_VARIABLES_IO.md](TABLA_VARIABLES_IO.md) y en la secci
 ---
 
 ## Brazo robótico 5 DOF
+
+<p align="center"><img src="docs/img/brazo.svg" alt="Render del brazo robótico 5 DOF" width="620"></p>
 
 Proyecto ESP-IDF aparte en [`robot_servos/`](robot_servos/), para otra placa ESP32. Mueve 5 servos (base, hombro, codo, muñeca y pinza) en los GPIO 23, 22, 19, 18 y 15. El ESP32 crea la red Wi-Fi **"Robot-Pinza"** y sirve una web con un slider por articulación y una vista 3D del brazo.
 
@@ -126,6 +130,8 @@ idf.py -p COMx -b 115200 flash monitor
 - [docs/selladora.md](docs/selladora.md): arquitectura, proceso, compresor, API HTTP, cableado y solución de problemas.
 - [TABLA_VARIABLES_IO.md](TABLA_VARIABLES_IO.md): tablas de entradas/salidas, variables, constantes y tareas.
 - [robot_servos/README.md](robot_servos/README.md): brazo robótico 5 DOF.
+- [docs/diagramas.md](docs/diagramas.md): diagramas de bloques, conexiones, tareas FreeRTOS y ciclos de los dos proyectos.
+- [docs/historia.md](docs/historia.md): diagrama de flujo de los prompts y decisiones que llevaron a este repositorio, con las lecciones del banco de pruebas.
 
 ## Licencia
 

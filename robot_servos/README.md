@@ -1,5 +1,7 @@
 # Brazo robótico de 5 grados de libertad con ESP32
 
+<p align="center"><img src="../docs/img/brazo.svg" alt="Render del brazo robótico 5 DOF" width="620"></p>
+
 Brazo de **5 grados de libertad (5 DOF)** impreso en 3D y movido por servomotores, controlado por un **ESP32** desde una página web que sirve el propio ESP32 en su red Wi-Fi. No hace falta internet ni instalar ninguna app: te conectas a la red del robot, abres el navegador y mueves cada articulación.
 
 - **Base, hombro y codo:** servos grandes tipo **MG996R**.
